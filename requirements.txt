@@ -5,5 +5,5 @@ numpy==1.26.4
 pandas==2.2.1
 pillow==10.2.0
 requests==2.31.0
-st_clickable_images=0.0.3
+st_clickable_images==0.0.3
 streamlit==1.33.0

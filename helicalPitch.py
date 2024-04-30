@@ -181,6 +181,8 @@ def main():
         st.bokeh_chart(fig, use_container_width=True)
         st.write("**How to interpretate the histogram:** an informative histogram should have clear peaks with equal spacing. If so, hover your mouse pointer on the first peak to show the twist values assuming the pair-distance is the helical pitch (adjusted for the cyclic symmetries around the helical axis). If the histogram does not show clear peaks, it indicates that the Class2D quality is bad. You might consider redoing the Class2D task with longer extracted segments (>0.5x helical pitch) from longer filaments (> 1x pitch)")
 
+        st.markdown("*Developed by the [Jiang Lab@Purdue University](https://jiang.bio.purdue.edu/HelicalPitch). Report problems to [HelicalPitch@GitHub](https://github.com/jianglab/HelicalPitch/issues)*")
+
     return
 
 @st.cache_data(show_spinner=False)
