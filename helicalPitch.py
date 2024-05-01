@@ -271,15 +271,28 @@ def plot_histogram(data, title, xlabel, ylabel, bins=50, log_y=True, show_pitch_
         n_crosshairs = 20
         crosshairs = []
         for i in range(2, n_crosshairs):
-            crosshair = Span(location=0, dimension='height', line_dash='dashed')
+            crosshair = Span(visible=False, dimension='height', line_dash='dashed')
             fig.add_layout(crosshair)
             crosshairs.append(crosshair)
         callback_code = "\n".join([f"crosshair_{i}.location = x*{i};" for i in range(2, n_crosshairs)])
-        callback = CustomJS(args={f"crosshair_{i}": crosshairs[i-2] for i in range(2, n_crosshairs)}, code=f"""
-            var x = cb_obj.x;
-            {callback_code}
-        """)
-        fig.js_on_event('mousemove', callback)        
+        callback = CustomJS(args={f"crosshair_{i}": crosshairs[i-2] for i in range(2, n_crosshairs)}, 
+            code=f"""
+                var x = cb_obj.x;
+                {callback_code}
+            """)
+        fig.js_on_event('mousemove', callback)      
+        callback_code = "\n".join([f"crosshair_{i}.visible = false;" for i in range(2, n_crosshairs)])
+        callback = CustomJS(args={f"crosshair_{i}": crosshairs[i-2] for i in range(2, n_crosshairs)}, 
+            code=f"""
+                {callback_code}
+            """)
+        fig.js_on_event('mouseleave', callback)
+        callback_code = "\n".join([f"crosshair_{i}.visible = true;" for i in range(2, n_crosshairs)])
+        callback = CustomJS(args={f"crosshair_{i}": crosshairs[i-2] for i in range(2, n_crosshairs)}, 
+            code=f"""
+                {callback_code}
+            """)
+        fig.js_on_event('mouseenter', callback)
     return fig
 
 def create_image_figure(image, dx, dy, title="", title_location="above", plot_width=None, plot_height=None, x_axis_label='x', y_axis_label='y', tooltips=None, show_axis=True, show_toolbar=True, crosshair_color="white", aspect_ratio=None):
