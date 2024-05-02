@@ -12,16 +12,16 @@ def main():
     st.title(title)
 
     with st.expander(label="README", expanded=False):
-            st.write("This is a Web App to help users determine helical pitch/twist using 2D classification info.  \nNOTE: the uploaded files are **strictly confidential**. The developers of this app do not have access to the files")
+            st.write("This is a Web App that helps the user determine helical pitch/twist using 2D classification info. When two segments on the same filament are assigned to the same 2D class, it means that two segments have same rotation angle around the helical axis and the distance between this pair of segments will be equal to pitch/csym. Here, we find all those pairs, collect the pair distances, and then plot the histogram of the pair distances. If the 2D classification quality is good, the histogram should show prominent peaks of equal spacing with the spacing = pitch/csym.  \n  \n*NOTE: the uploaded files are **strictly confidential**. The developers of this app do not have access to the files*")
 
     col1, [col2, col3] = st.sidebar, st.columns([0.5,1])
 
     with col1:
+        params = None
         input_modes_params = {0:"upload", 1:"url"} 
         help_params = "Only RELION star and cryoSPARC cs formats are supported"
         input_mode_params = st.radio(label="How to obtain the Class2D parameter file:", options=list(input_modes_params.keys()), format_func=lambda i:input_modes_params[i], index=1, horizontal=True, help=help_params, key="input_mode_params")
         if input_mode_params == 0: # "upload a star or cs file":
-            params = None
             label = "Upload the class2d parameters in a RELION star or cryoSPARC cs file"
             help = None
             fileobj = st.file_uploader(label, type=['star', "cs"], help=help, key="upload_params")
@@ -35,8 +35,6 @@ def main():
                 params = get_class2d_params_from_uploaded_file(fileobj, fileobj_cs_pass_through)
             else: # RELION
                 params = get_class2d_params_from_uploaded_file(fileobj)
-            if params is None:
-                return
         else:   # download from a URL
             params = None
             label = "Download URL for a RELION star or cryoSPARC cs file"
@@ -53,18 +51,11 @@ def main():
                 params = get_class2d_params_from_url(url, url_cs_pass_through)
             else:
                 params = get_class2d_params_from_url(url)
-            if params is None:
-                return
+        if params is None:
+            return
 
-        required_attrs = np.unique("rlnImageName rlnHelicalTubeID rlnHelicalTrackLengthAngst rlnCoordinateX rlnCoordinateY rlnClassNumber rlnAnglePsi".split())
-        missing_attrs = [attr for attr in required_attrs if attr not in params]
-        if missing_attrs:
-            st.error(f"ERROR: parameters {missing_attrs} are not available")
-            st.stop()
-
-        helices = list(params.groupby(["rlnMicrographName", "rlnHelicalTubeID"]))
-        nClasses = len(params["rlnClassNumber"].unique())
-        st.write(f"*{len(params):,} particles | {len(helices):,} filaments | {nClasses} classes*")
+        nHelices, nClasses = get_number_helices_classes(params)
+        st.write(f"*{len(params):,} particles | {nHelices:,} filaments | {nClasses} classes*")
 
         st.divider()
 
@@ -92,11 +83,9 @@ def main():
         n, ny, nx = data_all.shape
         st.write(f"*{n} classes: {nx}x{ny} pixels | {round(apix,4)} Å/pixel*")
 
-        abundance = np.zeros(n, dtype=int)
-        for gn, g in params.groupby("rlnClassNumber"):
-            abundance[int(gn)-1] = len(g)
+        abundance = get_class_abundance(params, n)
         display_seq = np.arange(n, dtype=int)
-
+        
         ignore_blank = st.checkbox("Ignore blank classes", value=True, key="ignore_blank")
         sort_abundance = st.checkbox("Sort the classes by abundance", value=True, key="sort_abundance")
         if sort_abundance:
@@ -115,14 +104,13 @@ def main():
             with st.container(height=min(500, len(images)*thumbnail_size//n_per_row), border=False):
                 image_index = clickable_images(
                     images,
-                    titles=[f"{i+1} - {abundance[i]}" for i in display_seq if abundance[i] or not ignore_blank],
+                    titles=[f"Class {i+1}: {abundance[i]:,} particles" for i in display_seq if abundance[i] or not ignore_blank],
                     div_style={"display": "flex", "justify-content": "center", "flex-wrap": "wrap"},
                     img_style={"margin": "1px", "height": f"{thumbnail_size}px"},
                     key=f"class_display"
                 )
                 image_index = max(0, image_index)
         class_index = images_displayed[image_index]
-        data = data_all[class_index]
 
         apix_particle = st.number_input("Pixel size of particles", min_value=0.1, max_value=100.0, value=apix, format="%.3f", help="Å/pixel", key="apix_particle")
         # ["micrograph_blob/psize_A", "rlnMicrographPixelSize", "rlnMicrographOriginalPixelSize", "blob/psize_A", "rlnImagePixelSize"]
@@ -148,38 +136,24 @@ def main():
                 msg += f"The placeholder value {apix_micrograph_auto:.3f} was based on **{apix_micrograph_auto_source}**. Note that If you have downscaled the particles during particle extraction, you should divide {apix_micrograph_auto:.3f} by the downscaling factor used during particle extraction"
                 st.warning(msg)
 
-        distseg = estimate_inter_segment_distance(params)
-        params["segmentid"] = assign_segment_id(params, distseg)
-
         if apix_micrograph is None:
             st.stop()
 
-    with col2:
-        params['rlnCoordinateX'] = params.loc[:, 'rlnCoordinateX'].astype(float)*apix_micrograph
-        params['rlnCoordinateY'] = params.loc[:, 'rlnCoordinateY'].astype(float)*apix_micrograph
+    with col2:        
+        params = update_particle_locations(params, apix_micrograph)
+        with st.spinner(f"Selecting filaments in Class {class_index+1}"):
+            helices = select_class(params, class_index, apix_micrograph)
 
-        if 'rlnOriginXAngst' in params and 'rlnOriginYAngst' in params:
-            params.loc[:, 'rlnCoordinateX'] -= params.loc[:, 'rlnOriginXAngst'].astype(float)
-            params.loc[:, 'rlnCoordinateY'] -= params.loc[:, 'rlnOriginYAngst'].astype(float)
+        data = data_all[class_index]
 
-        particles = params.loc[params["rlnClassNumber"].astype(int)==class_index+1, :]
-        helices = list(particles.groupby(["rlnMicrographName", "rlnHelicalTubeID"]))
-
-        nHelices = 0
-        filement_lengths = []
-        for gn, g in helices:
-            track_lengths = g["rlnHelicalTrackLengthAngst"].astype(float).values
-            l = track_lengths.max() - track_lengths.min() + apix_particle*nx
-            filement_lengths.append(l)
-            g["filamentLength"] = l
-            nHelices += 1
-
-        image_label = f"Class {class_index+1}: {abundance[class_index]:,} segments | {nHelices:,} filaments"
+        image_label = f"Class {class_index+1}: {abundance[class_index]:,} segments | {len(helices):,} filaments"
         fig = create_image_figure(data, apix, apix, title=image_label, title_location="above", plot_width=None, plot_height=None, x_axis_label=None, y_axis_label=None, tooltips=None, show_axis=False, show_toolbar=False, crosshair_color="white")
         st.bokeh_chart(fig, use_container_width=True)
         
+        with st.spinner("Checking filament length"):
+            filement_lengths = get_filament_length(helices, apix_particle*nx)
+
         log_y = True
-        
         title = f"Filament Lengths: Class {class_index+1}"
         xlabel = "Filament Legnth (Å)"
         ylabel = "# of Filaments"
@@ -187,19 +161,15 @@ def main():
         st.bokeh_chart(fig, use_container_width=True)
         
         min_len = st.number_input("Select filaments of a minimal length (Å)", min_value=0.0, max_value=np.max(filement_lengths), value=0.0, format="%.0f", help="Only use filaments of at least this length for subsequent pair-distance calculation", key="min_len")
-        if min_len>0:
-            helices_retained = []
-            n_ptcls = 0
-            for gn, g in helices:
-                if g["filamentLength"].values[0]>=min_len:
-                    n_ptcls += len(g)
-                    helices_retained.append((gn, g))
-            st.write(f"{len(helices_retained)} filaments ≥ {min_len} Å in length → {n_ptcls} segments")
+        
+        helices_retained, n_ptcls = select_helices_by_length(helices, filement_lengths, min_len)
+        st.write(f"*{len(helices_retained)} filaments ≥ {min_len} Å in length → {n_ptcls} segments*")
+        
         rise = st.number_input("Helical rise (Å)", min_value=0.01, max_value=apix_particle*nx, value=4.75, format="%.2f", help="helical rise", key="rise")
 
     with col3:
-        
-        pair_dists = process_one_class(helices)
+        with st.spinner("Computing the histogram"):
+            pair_dists = process_one_class(helices_retained)
         title = f"Pair Distances: Class {class_index+1}"
         xlabel = "Pair Distance (Å)"
         ylabel = "# of Pairs"
@@ -211,7 +181,7 @@ def main():
 
     return
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def process_one_class(helices):
     dists_same_class = []
     for _, segments in helices:
@@ -295,6 +265,54 @@ def plot_histogram(data, title, xlabel, ylabel, bins=50, log_y=True, show_pitch_
         fig.js_on_event('mouseenter', callback)
     return fig
 
+#@st.cache_data(show_spinner=False)
+def select_helices_by_length(helices, lengths, min_len):
+    helices_retained = []
+    n_ptcls = 0
+    for gi, (gn, g) in enumerate(helices):
+        if lengths[gi] >= min_len:
+            n_ptcls += len(g)
+            helices_retained.append((gn, g))
+    return helices_retained, n_ptcls
+
+#@st.cache_data(show_spinner=False)
+def get_filament_length(helices, particle_box_length):
+    filement_lengths = []
+    for gn, g in helices:
+        track_lengths = g["rlnHelicalTrackLengthAngst"].astype(float).values
+        length = track_lengths.max() - track_lengths.min() + particle_box_length
+        filement_lengths.append(length)
+    return filement_lengths
+
+@st.cache_data(show_spinner=False)
+def select_class(params, class_index, apix_micrograph):
+    particles = params.loc[params["rlnClassNumber"].astype(int)==class_index+1, :]
+    helices = list(particles.groupby(["rlnMicrographName", "rlnHelicalTubeID"]))
+    return helices
+
+@st.cache_data(show_spinner=False)
+def get_class_abundance(params, nClass):
+    abundance = np.zeros(nClass, dtype=int)
+    for gn, g in params.groupby("rlnClassNumber"):
+        abundance[int(gn)-1] = len(g)
+    return abundance
+    
+@st.cache_data(show_spinner=False)
+def update_particle_locations(params, apix_micrograph):
+    ret = params.copy()
+    ret['rlnCoordinateX'] = params.loc[:, 'rlnCoordinateX'].astype(float)*apix_micrograph
+    ret['rlnCoordinateY'] = params.loc[:, 'rlnCoordinateY'].astype(float)*apix_micrograph
+    if 'rlnOriginXAngst' in params and 'rlnOriginYAngst' in params:
+        ret.loc[:, 'rlnCoordinateX'] -= params.loc[:, 'rlnOriginXAngst'].astype(float)
+        ret.loc[:, 'rlnCoordinateY'] -= params.loc[:, 'rlnOriginYAngst'].astype(float)
+    return ret
+
+@st.cache_data(show_spinner=False)
+def get_number_helices_classes(params):
+    nHelices = len(list(params.groupby(["rlnMicrographName", "rlnHelicalTubeID"])))
+    nClasses = len(params["rlnClassNumber"].unique())
+    return  nHelices, nClasses 
+    
 def create_image_figure(image, dx, dy, title="", title_location="above", plot_width=None, plot_height=None, x_axis_label='x', y_axis_label='y', tooltips=None, show_axis=True, show_toolbar=True, crosshair_color="white", aspect_ratio=None):
     from bokeh.plotting import ColumnDataSource, figure
     h, w = image.shape
@@ -416,11 +434,11 @@ def get_class2d_from_uploaded_file(fileobj):
 @st.cache_data(show_spinner=False)
 def get_class2d_from_url(url):
     url_final = get_direct_url(url)    # convert cloud drive indirect url to direct url
-    local_filename = download_file_from_url(url_final)
-    if local_filename is None:
+    fileobj = download_file_from_url(url_final)
+    if fileobj is None:
         st.error(f"ERROR: {url} could not be downloaded. If this url points to a cloud drive file, make sure the link is a direct download link instead of a link for preview")
         st.stop()
-    data = get_class2d_from_file(local_filename)
+    data = get_class2d_from_file(fileobj.name)
     return data
 
 @st.cache_data(show_spinner=False)
@@ -450,19 +468,19 @@ def get_class2d_params_from_uploaded_file(fileobj, fileobj_cs_pass_through=None)
 @st.cache_data(show_spinner=False)
 def get_class2d_params_from_url(url, url_cs_pass_through=None):
     url_final = get_direct_url(url)    # convert cloud drive indirect url to direct url
-    local_filename = download_file_from_url(url_final)
-    if local_filename is None:
+    fileobj = download_file_from_url(url_final)
+    if fileobj is None:
         st.error(f"ERROR: {url} could not be downloaded. If this url points to a cloud drive file, make sure the link is a direct download link instead of a link for preview")
         st.stop()
     if url_cs_pass_through is None:
-        data = get_class2d_params_from_file(local_filename)
+        data = get_class2d_params_from_file(fileobj.name)
         return data
     url_final_cs_pass_through = get_direct_url(url_cs_pass_through)    # convert cloud drive indirect url to direct url
-    local_filename_cs_pass_through = download_file_from_url(url_final_cs_pass_through)
-    if local_filename_cs_pass_through is None:
+    fileobj_cs_pass_through = download_file_from_url(url_final_cs_pass_through)
+    if fileobj_cs_pass_through is None:
         st.error(f"ERROR: {url_cs_pass_through} could not be downloaded. If this url points to a cloud drive file, make sure the link is a direct download link instead of a link for preview")
         st.stop()
-    data = get_class2d_params_from_file(local_filename, local_filename_cs_pass_through)
+    data = get_class2d_params_from_file(fileobj.name, fileobj_cs_pass_through.name)
     return data    
 
 @st.cache_data(show_spinner=False)
@@ -473,6 +491,13 @@ def get_class2d_params_from_file(params_file, cryosparc_pass_through_file=None):
         elif params_file.endswith(".cs"):
             assert cryosparc_pass_through_file is not None
             params = cs_to_dataframe(params_file, cryosparc_pass_through_file)
+    required_attrs = np.unique("rlnImageName rlnHelicalTubeID rlnHelicalTrackLengthAngst rlnCoordinateX rlnCoordinateY rlnClassNumber rlnAnglePsi".split())
+    missing_attrs = [attr for attr in required_attrs if attr not in params]
+    if missing_attrs:
+        st.error(f"ERROR: parameters {missing_attrs} are not available")
+        st.stop()
+    distseg = estimate_inter_segment_distance(params)
+    params["segmentid"] = assign_segment_id(params, distseg)
     return params
 
 @st.cache_data(show_spinner=False)
@@ -561,18 +586,19 @@ def cs_to_dataframe(cs_file, cs_pass_through_file):
         ret["rlnAnglePsi"] = -np.rad2deg(data["alignments2D/pose"]).round(2)
     return ret
 
-@st.cache_data(persist=True, show_spinner=False)
 def download_file_from_url(url):
+    import tempfile
     import requests
     try:
         filesize = get_file_size(url)
         local_filename = url.split('/')[-1]
+        suffix = '.' + local_filename
+        fileobj = tempfile.NamedTemporaryFile(suffix=suffix)
         with st.spinner(f'Downloading {url} ({filesize/2**20:.1f} MB)'):
             with requests.get(url) as r:
                 r.raise_for_status()  # Check for request success
-                with open(local_filename, 'wb') as f:
-                    f.write(r.content)
-        return local_filename
+                fileobj.write(r.content)
+        return fileobj
     except requests.exceptions.RequestException as e:
         return None
 
