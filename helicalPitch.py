@@ -165,8 +165,11 @@ def main():
         fig = plot_histogram(filement_lengths, title=title, xlabel=xlabel, ylabel=ylabel, bins=50, log_y=log_y)
         st.bokeh_chart(fig, use_container_width=True)
         
-        min_len = st.number_input("Select filaments longer than this length (Å)", min_value=0.0, max_value=None, value=0.0, format="%.0f", help="Only use filaments longer than this length for subsequent pair-distance calculation", key="min_len")
-        max_len = st.number_input("Select filaments shorter than this length (Å)", min_value=0.0, max_value=None, value=None, format="%.0f", help="Only use filaments shoter than this length for subsequent pair-distance calculation", key="max_len")
+        min_len = st.number_input("Select filaments longer than this length (Å)", min_value=0.0, max_value=None, value=0.0, step=1.0, format="%.0f", help="Only use filaments longer than this length for subsequent pair-distance calculation", key="min_len")
+        max_len = st.number_input("Select filaments shorter than this length (Å)", min_value=0.0, max_value=None, value=None, step=1.0, format="%.0f", help="Only use filaments shoter than this length for subsequent pair-distance calculation", key="max_len")
+        if max_len is not None and max_len <= min_len:
+            st.error(f"ERROR: the minimal filament length ({min_len} Å) should be smaller than the maximal length ({max_len} Å)")
+            st.stop()
         
         helices_retained, n_ptcls = select_helices_by_length(helices, filement_lengths, min_len, max_len)
         if max_len is None:
@@ -283,7 +286,7 @@ def select_helices_by_length(helices, lengths, min_len, max_len):
     n_ptcls = 0
     for gi, (gn, g) in enumerate(helices):
         cond = max_len is None and min_len <= lengths[gi]
-        cond = cond or (max_len > min_len and (min_len <= lengths[gi] < max_len))
+        cond = cond or (max_len is not None and (max_len > min_len and (min_len <= lengths[gi] < max_len)))
         if cond:
             n_ptcls += len(g)
             helices_retained.append((gn, g))
