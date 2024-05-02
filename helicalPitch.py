@@ -60,7 +60,7 @@ def main():
         st.divider()
 
         input_modes_classes = {0:"upload", 1:"url"} 
-        help_classes = "Only MRC (*\*.mrcs*) format is supported"
+        help_classes = "Only MRC (.mrcs, .mrc) format is supported"
         input_mode_classes = st.radio(label="How to obtain the class average images:", options=list(input_modes_classes.keys()), format_func=lambda i:input_modes_classes[i], index=1, horizontal=True, help=help_classes, key="input_mode_classes")
         if input_mode_classes == 0: # "upload a MRC file":
             label = "Upload the class averages in MRC format (.mrcs, .mrc)"
@@ -144,11 +144,16 @@ def main():
         with st.spinner(f"Selecting filaments in Class {class_index+1}"):
             helices = select_class(params, class_index, apix_micrograph)
 
+        if abundance[class_index] < 2:
+            st.error(f"ERROR: class {class_index} has only {abundance[class_index]} particles which is insufficient for subsequent analysis. Choose another class with more particles")
+            st.stop()
+
         data = data_all[class_index]
 
         image_label = f"Class {class_index+1}: {abundance[class_index]:,} segments | {len(helices):,} filaments"
         fig = create_image_figure(data, apix, apix, title=image_label, title_location="above", plot_width=None, plot_height=None, x_axis_label=None, y_axis_label=None, tooltips=None, show_axis=False, show_toolbar=False, crosshair_color="white")
         st.bokeh_chart(fig, use_container_width=True)
+
         
         with st.spinner("Checking filament length"):
             filement_lengths = get_filament_length(helices, apix_particle*nx)
@@ -160,10 +165,17 @@ def main():
         fig = plot_histogram(filement_lengths, title=title, xlabel=xlabel, ylabel=ylabel, bins=50, log_y=log_y)
         st.bokeh_chart(fig, use_container_width=True)
         
-        min_len = st.number_input("Select filaments of a minimal length (Å)", min_value=0.0, max_value=np.max(filement_lengths), value=0.0, format="%.0f", help="Only use filaments of at least this length for subsequent pair-distance calculation", key="min_len")
+        min_len = st.number_input("Select filaments longer than this length (Å)", min_value=0.0, max_value=None, value=0.0, format="%.0f", help="Only use filaments longer than this length for subsequent pair-distance calculation", key="min_len")
+        max_len = st.number_input("Select filaments shorter than this length (Å)", min_value=0.0, max_value=None, value=None, format="%.0f", help="Only use filaments shoter than this length for subsequent pair-distance calculation", key="max_len")
         
-        helices_retained, n_ptcls = select_helices_by_length(helices, filement_lengths, min_len)
-        st.write(f"*{len(helices_retained)} filaments ≥ {min_len} Å in length → {n_ptcls} segments*")
+        helices_retained, n_ptcls = select_helices_by_length(helices, filement_lengths, min_len, max_len)
+        if max_len is None:
+            st.write(f"*{len(helices_retained)} filaments ≥ {min_len} Å in length → {n_ptcls} segments*")
+        else:
+            st.write(f"*{len(helices_retained)} filaments with length in range [{min_len}, {max_len}) Å → {n_ptcls} segments*")
+        if n_ptcls < 2:
+            st.error(f"ERROR: insufficient number of particles for subsequent analysis. Check your min and max length choices")
+            st.stop()
         
         rise = st.number_input("Helical rise (Å)", min_value=0.01, max_value=apix_particle*nx, value=4.75, format="%.2f", help="helical rise", key="rise")
 
@@ -266,11 +278,13 @@ def plot_histogram(data, title, xlabel, ylabel, bins=50, log_y=True, show_pitch_
     return fig
 
 #@st.cache_data(show_spinner=False)
-def select_helices_by_length(helices, lengths, min_len):
+def select_helices_by_length(helices, lengths, min_len, max_len):
     helices_retained = []
     n_ptcls = 0
     for gi, (gn, g) in enumerate(helices):
-        if lengths[gi] >= min_len:
+        cond = max_len is None and min_len <= lengths[gi]
+        cond = cond or (max_len > min_len and (min_len <= lengths[gi] < max_len))
+        if cond:
             n_ptcls += len(g)
             helices_retained.append((gn, g))
     return helices_retained, n_ptcls
@@ -284,20 +298,20 @@ def get_filament_length(helices, particle_box_length):
         filement_lengths.append(length)
     return filement_lengths
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def select_class(params, class_index, apix_micrograph):
     particles = params.loc[params["rlnClassNumber"].astype(int)==class_index+1, :]
     helices = list(particles.groupby(["rlnMicrographName", "rlnHelicalTubeID"]))
     return helices
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def get_class_abundance(params, nClass):
     abundance = np.zeros(nClass, dtype=int)
     for gn, g in params.groupby("rlnClassNumber"):
         abundance[int(gn)-1] = len(g)
     return abundance
     
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def update_particle_locations(params, apix_micrograph):
     ret = params.copy()
     ret['rlnCoordinateX'] = params.loc[:, 'rlnCoordinateX'].astype(float)*apix_micrograph
@@ -307,7 +321,7 @@ def update_particle_locations(params, apix_micrograph):
         ret.loc[:, 'rlnCoordinateY'] -= params.loc[:, 'rlnOriginYAngst'].astype(float)
     return ret
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def get_number_helices_classes(params):
     nHelices = len(list(params.groupby(["rlnMicrographName", "rlnHelicalTubeID"])))
     nClasses = len(params["rlnClassNumber"].unique())
@@ -378,7 +392,7 @@ def get_pixel_size(data, attrs=["micrograph_blob/psize_A", "rlnMicrographPixelSi
                 else: return apix
     return None
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def assign_segment_id(data, inter_segment_distance):
     assert "rlnHelicalTrackLengthAngst" in data
     tmp = data.loc[:, "rlnHelicalTrackLengthAngst"].astype(float) / inter_segment_distance
@@ -388,7 +402,7 @@ def assign_segment_id(data, inter_segment_distance):
     helical_segment_id = tmp.round().astype(int)
     return helical_segment_id
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def estimate_inter_segment_distance(data):
     # data must have been sorted by micrograph, rlnHelicalTubeID, and rlnHelicalTrackLengthAngst
     helices = data.groupby(['rlnMicrographName', "rlnHelicalTubeID"], sort=False)
@@ -407,7 +421,10 @@ def estimate_inter_segment_distance(data):
 def encode_numpy(img, hflip=False, vflip=False):
     if img.dtype != np.dtype('uint8'):
         vmin, vmax = img.min(), img.max()
-        tmp = (255*(img-vmin)/(vmax-vmin)).astype(np.uint8)
+        if vmax>vmin:
+            tmp = (255*(img-vmin)/(vmax-vmin)).astype(np.uint8)
+        else:
+            tmp = np.zeros_like(img, dtype=np.uint8)
     else:
         tmp = img
     if hflip:
@@ -422,7 +439,7 @@ def encode_numpy(img, hflip=False, vflip=False):
     encoded = base64.b64encode(buffer.getvalue()).decode()
     return f"data:image/jpeg;base64, {encoded}"
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def get_class2d_from_uploaded_file(fileobj):
     import os, tempfile
     orignal_filename = fileobj.name
@@ -431,7 +448,7 @@ def get_class2d_from_uploaded_file(fileobj):
         temp.write(fileobj.read())
         return get_class2d_from_file(temp.name)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(persist=True, max_entries=10, show_spinner=False)
 def get_class2d_from_url(url):
     url_final = get_direct_url(url)    # convert cloud drive indirect url to direct url
     fileobj = download_file_from_url(url_final)
@@ -441,7 +458,7 @@ def get_class2d_from_url(url):
     data = get_class2d_from_file(fileobj.name)
     return data
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def get_class2d_from_file(classFile):
     import mrcfile
     with mrcfile.open(classFile) as mrc:
@@ -465,7 +482,7 @@ def get_class2d_params_from_uploaded_file(fileobj, fileobj_cs_pass_through=None)
                 temp_cs_pass_through.write(fileobj_cs_pass_through.read())
                 return get_class2d_params_from_file(temp.name, temp_cs_pass_through.name)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(persist=True, max_entries=10, show_spinner=False)
 def get_class2d_params_from_url(url, url_cs_pass_through=None):
     url_final = get_direct_url(url)    # convert cloud drive indirect url to direct url
     fileobj = download_file_from_url(url_final)
@@ -483,7 +500,7 @@ def get_class2d_params_from_url(url, url_cs_pass_through=None):
     data = get_class2d_params_from_file(fileobj.name, fileobj_cs_pass_through.name)
     return data    
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def get_class2d_params_from_file(params_file, cryosparc_pass_through_file=None):
     with st.spinner("Reading parameters"):
         if params_file.endswith(".star"):
@@ -500,7 +517,7 @@ def get_class2d_params_from_file(params_file, cryosparc_pass_through_file=None):
     params["segmentid"] = assign_segment_id(params, distseg)
     return params
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def star_to_dataframe(starFile):
     import pandas as pd
     from gemmi import cif
@@ -526,7 +543,7 @@ def star_to_dataframe(starFile):
     data["starFile"] = starFile
     return data
 
-@st.cache_data(show_spinner=False)
+#@st.cache_data(show_spinner=False)
 def cs_to_dataframe(cs_file, cs_pass_through_file):
     cs = np.load(cs_file)
     df_cs = pd.DataFrame.from_records(cs.tolist(), columns=cs.dtype.names)
