@@ -11,6 +11,9 @@ def main():
     st.set_page_config(page_title=title, layout="wide")
     st.title(title)
 
+    if len(st.session_state)<1:  # only run once at the start of the session
+        set_session_state_from_query_params()
+
     with st.expander(label="README", expanded=False):
             st.write("This is a Web App that helps the user determine helical pitch/twist using 2D classification info. When two segments on the same filament are assigned to the same 2D class, it means that two segments have same rotation angle around the helical axis and the distance between this pair of segments will be equal to pitch/csym. Here, we find all those pairs, collect the pair distances, and then plot the histogram of the pair distances. If the 2D classification quality is good, the histogram should show prominent peaks of equal spacing with the spacing = pitch/csym.  \n  \n*NOTE: the uploaded files are **strictly confidential**. The developers of this app do not have access to the files*")
 
@@ -139,6 +142,10 @@ def main():
         if apix_micrograph is None:
             st.stop()
 
+        st.divider()
+        
+        share_url = st.checkbox('Show sharable URL', value=False, help="Include relevant parameters in the browser URL to allow you to share the URL and reproduce the plots", key="share_url")
+
     with col2:        
         params = update_particle_locations(params, apix_micrograph)
         with st.spinner(f"Selecting filaments in Class {class_index+1}"):
@@ -165,8 +172,12 @@ def main():
         fig = plot_histogram(filement_lengths, title=title, xlabel=xlabel, ylabel=ylabel, bins=50, log_y=log_y)
         st.bokeh_chart(fig, use_container_width=True)
         
-        min_len = st.number_input("Select filaments longer than this length (Å)", min_value=0.0, max_value=None, value=0.0, step=1.0, format="%.0f", help="Only use filaments longer than this length for subsequent pair-distance calculation", key="min_len")
-        max_len = st.number_input("Select filaments shorter than this length (Å)", min_value=0.0, max_value=None, value=None, step=1.0, format="%.0f", help="Only use filaments shoter than this length for subsequent pair-distance calculation", key="max_len")
+        st.write("Min/max filament length for further analysis:")
+        len_col1, len_col2 = st.columns(2)
+        with len_col1:
+            min_len = st.number_input("Minimal length (Å)", min_value=0.0, max_value=None, value=0.0, step=1.0, format="%.0f", help="Only use filaments longer than this length for subsequent pair-distance calculation", key="min_len")
+        with len_col2:
+            max_len = st.number_input("Maximal length (Å)", min_value=0.0, max_value=None, value=None, step=1.0, format="%.0f", help="Only use filaments shoter than this length for subsequent pair-distance calculation", key="max_len")
         if max_len is not None and max_len <= min_len:
             st.error(f"ERROR: the minimal filament length ({min_len} Å) should be smaller than the maximal length ({max_len} Å)")
             st.stop()
@@ -193,6 +204,11 @@ def main():
         st.write("**How to interpretate the histogram:** an informative histogram should have clear peaks with equal spacing. If so, hover your mouse pointer on the first prominent peak to the right side of the primary peak at the origin to show the twist values assuming the pair-distance is the helical pitch (adjusted for the cyclic symmetries around the helical axis). If the histogram does not show clear peaks, it indicates that the Class2D quality is bad. You might consider redoing the Class2D task with longer extracted segments (>0.5x helical pitch) from longer filaments (> 1x pitch)")
 
         st.markdown("*Developed by the [Jiang Lab@Purdue University](https://jiang.bio.purdue.edu/HelicalPitch). Report problems to [HelicalPitch@GitHub](https://github.com/jianglab/HelicalPitch/issues)*")
+        
+        if share_url:
+            set_query_params_from_session_state()
+        else:
+            st.query_params.clear()
 
     return
 
@@ -467,7 +483,7 @@ def get_class2d_from_file(classFile):
     with mrcfile.open(classFile) as mrc:
         apix = float(mrc.voxel_size.x)
         data = mrc.data
-    return data, apix
+    return data, round(apix, 4)
 
 @st.cache_data(show_spinner=False)
 def get_class2d_params_from_uploaded_file(fileobj, fileobj_cs_pass_through=None):
@@ -631,6 +647,37 @@ def get_file_size(url):
         return file_size
     else:
         return None
+
+int_types = {'class_display':0, 'sort_abundance':1, 'ignore_blank':1, 'input_mode_classes':1, 'input_mode_params':1, 'share_url':0}
+float_types = {'apix_particle':4.944, 'apix_micrograph':None, 'min_len':0, 'max_len':None, 'rise':4.75}
+other_types = {'url_classes':'https://ftp.ebi.ac.uk/empiar/world_availability/10940/data/EMPIAR/Class2D/768px/run_it020_classes.mrcs', 'url_params':'https://ftp.ebi.ac.uk/empiar/world_availability/10940/data/EMPIAR/Class2D/768px/run_it020_data.star'}
+
+def set_query_params_from_session_state():
+    for im in 'input_mode_classes input_mode_params'.split():
+        if st.session_state.get(im, None) == 0: 
+            st.warning("WARNING: the 'upload' input does NOT include complete information that can be used as a bookmark")
+            break
+    d = {}
+    attrs = sorted(st.session_state.keys())
+    for attr in attrs:
+        v = st.session_state[attr]
+        if v is None: continue
+        if attr in int_types:
+            if int_types[attr]!=v: d[attr] = int(v)
+        elif attr in float_types:
+            if float_types[attr]!=v: d[attr] = float(v)
+        elif attr in other_types and other_types[attr]!=v:
+            d[attr] = v
+    st.query_params.update(d)
+
+def set_session_state_from_query_params():
+    for attr in sorted(st.query_params.keys()):
+        if attr in int_types:
+            st.session_state[attr] = int(st.query_params[attr])
+        elif attr in float_types:
+            st.session_state[attr] = float(st.query_params[attr])
+        elif attr in other_types:
+            st.session_state[attr] = st.query_params[attr]
     
 def get_direct_url(url):
     import re
