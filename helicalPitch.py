@@ -5,6 +5,7 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
+st.elements.utils._shown_default_value_warning = True
 
 def main():
     title = "HelicalPitch: determine helical pitch/twist using 2D Classification info"
@@ -145,6 +146,7 @@ def main():
         st.divider()
         
         share_url = st.checkbox('Show sharable URL', value=False, help="Include relevant parameters in the browser URL to allow you to share the URL and reproduce the plots", key="share_url")
+        share_url_msg = st.empty()
 
     with col2:        
         params = update_particle_locations(params, apix_micrograph)
@@ -193,20 +195,26 @@ def main():
         
         rise = st.number_input("Helical rise (Å)", min_value=0.01, max_value=apix_particle*nx, value=4.75, format="%.2f", help="helical rise", key="rise")
 
+        with st.expander(label="Additional settings:"):
+            max_pair_dist = st.number_input("Maximal pair distance (Å) to plot", min_value=0.0, max_value=None, value=None, format="%.0f", help="Only include pair distances less than this value when computing the pair distance histogram", key="max_pair_dist")
+            bins = st.number_input("Number of histogram bins", min_value=1, max_value=None, value=100, format="%d", help="Number of bins to be used for the pair distance histogram", key="bins")
+        
     with col3:
         with st.spinner("Computing the histogram"):
             pair_dists = process_one_class(helices_retained)
         title = f"Pair Distances: Class {class_index+1}"
         xlabel = "Pair Distance (Å)"
         ylabel = "# of Pairs"
-        fig = plot_histogram(pair_dists, title=title, xlabel=xlabel, ylabel=ylabel, bins=100, log_y=log_y, show_pitch_twist=dict(rise=rise, csyms=(1,2,3)), multi_crosshair=True)
+        fig = plot_histogram(pair_dists, title=title, xlabel=xlabel, ylabel=ylabel, max_pair_dist=max_pair_dist, bins=bins, log_y=log_y, show_pitch_twist=dict(rise=rise, csyms=(1,2,3,4)), multi_crosshair=True)
         st.bokeh_chart(fig, use_container_width=True)
         st.write("**How to interpretate the histogram:** an informative histogram should have clear peaks with equal spacing. If so, hover your mouse pointer on the first prominent peak to the right side of the primary peak at the origin to show the twist values assuming the pair-distance is the helical pitch (adjusted for the cyclic symmetries around the helical axis). If the histogram does not show clear peaks, it indicates that the Class2D quality is bad. You might consider redoing the Class2D task with longer extracted segments (>0.5x helical pitch) from longer filaments (> 1x pitch)")
 
         st.markdown("*Developed by the [Jiang Lab@Purdue University](https://jiang.bio.purdue.edu/HelicalPitch). Report problems to [HelicalPitch@GitHub](https://github.com/jianglab/HelicalPitch/issues)*")
         
         if share_url:
-            set_query_params_from_session_state()
+            msg = set_query_params_from_session_state()
+            if msg is not None:
+                share_url_msg.warning(msg)
         else:
             st.query_params.clear()
 
@@ -232,8 +240,10 @@ def process_one_class(helices):
     else:
         return np.sort(dists_same_class)
 
-def plot_histogram(data, title, xlabel, ylabel, bins=50, log_y=True, show_pitch_twist={}, multi_crosshair=False):     
+def plot_histogram(data, title, xlabel, ylabel, max_pair_dist=None, bins=50, log_y=True, show_pitch_twist={}, multi_crosshair=False):     
     from bokeh.plotting import ColumnDataSource, figure
+    if max_pair_dist is not None and max_pair_dist>0:
+        data = data[data<=max_pair_dist]
     hist, edges = np.histogram(data, bins=bins)
     hist_linear = hist
     if log_y:
@@ -648,14 +658,15 @@ def get_file_size(url):
     else:
         return None
 
-int_types = {'class_display':0, 'sort_abundance':1, 'ignore_blank':1, 'input_mode_classes':1, 'input_mode_params':1, 'share_url':0}
-float_types = {'apix_particle':4.944, 'apix_micrograph':None, 'min_len':0, 'max_len':None, 'rise':4.75}
+int_types = {'bins':100, 'class_display':0, 'sort_abundance':1, 'ignore_blank':1, 'input_mode_classes':1, 'input_mode_params':1, 'share_url':0}
+float_types = {'apix_particle':4.944, 'apix_micrograph':None, 'min_len':0, 'max_len':None, 'max_pair_dist':None, 'rise':4.75}
 other_types = {'url_classes':'https://ftp.ebi.ac.uk/empiar/world_availability/10940/data/EMPIAR/Class2D/768px/run_it020_classes.mrcs', 'url_params':'https://ftp.ebi.ac.uk/empiar/world_availability/10940/data/EMPIAR/Class2D/768px/run_it020_data.star'}
 
 def set_query_params_from_session_state():
+    msg = None
     for im in 'input_mode_classes input_mode_params'.split():
         if st.session_state.get(im, None) == 0: 
-            st.warning("WARNING: the 'upload' input does NOT include complete information that can be used as a bookmark")
+            msg = "WARNING: the 'upload' input does NOT include sufficient information to provide a complete URL that can be used as a bookmark"
             break
     d = {}
     attrs = sorted(st.session_state.keys())
@@ -669,6 +680,7 @@ def set_query_params_from_session_state():
         elif attr in other_types and other_types[attr]!=v:
             d[attr] = v
     st.query_params.update(d)
+    return msg
 
 def set_session_state_from_query_params():
     for attr in sorted(st.query_params.keys()):
